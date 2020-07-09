@@ -154,10 +154,12 @@ func isExistingPodAntiAffinityOk(terms []corev1.PodAffinityTerm) bool {
 // the return value in case of success is the first patch to the affinity attribute Op and Value,
 // basically the "add" or "replcace" and the updated Affinity attribute
 func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec *corev1.PodSpec) (interface{}, error) {
+	// check for namespace prefix if we have to
 	if len(nsPrefix) > 0 && !strings.HasPrefix(namespace, nsPrefix) {
 		return "", nil, fmt.Errorf("Namespace %s has not prefix %s", namespace, nsPrefix)
 	}
 
+	// check for the label we want to use in pod anti-affinity
 	if _, ok = metadata.Labels[podLabelForAffinity]; !ok {
 		return "", nil, fmt.Errorf("Failed retrieving %s label on %s/%s: %+v",
 			podLabelForAffinity, namespace, metadata.Name, err)
@@ -240,73 +242,16 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 	}
 
 	// core logic
-	affinityPatchOp, value, err := checkAndUpdateAffinity(depl.ObjectMeta.Namespace, &depl.Spec.Template.ObjectMeta, &depl.Spec.Template.Spec)
+	affinityPatchOp, value, err := checkAndUpdateAffinity(
+		depl.ObjectMeta.Namespace,
+		&depl.Spec.Template.ObjectMeta,
+		&depl.Spec.Template.Spec)
+
 	if err != nil {
 		klog.Errorf(err)
 		// leave it unchanged
 		return &admissionV1beta1.AdmissionResponse{Allowed: true}
 	}
-
-	// // check for the label we want to use in pod anti-affinity
-
-	// if _, ok = depl.Spec.Template.ObjectMeta.Labels[podLabelForAffinity]; !ok {
-	// 	klog.Errorf("Failed retrieving %s label on %s/%s: %+v", podLabelForAffinity, depl.ObjectMeta.Namespace, depl.ObjectMeta.Name, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-	// labelsForAffinity := make(map[string]string)
-	// labelsForAffinity[podLabelForAffinity] = depl.Spec.Template.ObjectMeta.Labels[podLabelForAffinity]
-
-	// // check if the Namespace is a jive jcx installation one
-	// ns, err := nsLister.Get(depl.ObjectMeta.Namespace)
-	// if err != nil {
-	// 	klog.Errorf("Failed retrieving %s: %+v", depl.ObjectMeta.Namespace, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// if !nsLabelSel.Matches(ns.ObjectMeta.Labels) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// // try to get the WebApp HPA in this NS
-	// hpa, err := hpaLister.HorizontalPodAutoscalers(ns.ObjectMeta.Name).Get(hpaName)
-	// if err != nil {
-	// 	klog.Errorf("Failed retrieving %s/%s: %+v", ns.ObjectMeta.Name, hpaName, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// if !hpaLabelSel.Matches(hpa.ObjectMeta.Labels) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// // check if maxReplicas in this HPA is ok to set affinity
-	// if hpa.Spec.MaxReplicas > int32(maximumHpaReplicas) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// affinityPatchOp := "replace"
-	// if depl.Spec.Template.Spec.Affinity == nil {
-	// 	depl.Spec.Template.Spec.Affinity = &corev1.Affinity{}
-	// 	affinityPatchOp = "add"
-	// }
-
-	// if depl.Spec.Template.Spec.Affinity.PodAntiAffinity == nil {
-	// 	depl.Spec.Template.Spec.Affinity.PodAntiAffinity = &corev1.PodAntiAffinity{}
-	// } else if isExistingPodAntiAffinityOk(depl.Spec.Template.Spec.Affinity.PodAntiAffinity) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// terms := depl.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
-	// terms = append(terms, getHardPodAntiAffinityTerm(labelsForAffinity))
-	// depl.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution = terms
-
-	// value = depl.Spec.Template.Spec.Affinity
 
 	patch = append(patch, webhooks.PatchOperation{
 		Op:    affinityPatchOp,
@@ -374,67 +319,6 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 		// leave it unchanged
 		return &admissionV1beta1.AdmissionResponse{Allowed: true}
 	}
-
-	// // check for the label we want to use in pod anti-affinity
-
-	// if _, ok = pod.ObjectMeta.Labels[podLabelForAffinity]; !ok {
-	// 	klog.Errorf("Failed retrieving %s label on %s/%s: %+v", podLabelForAffinity, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-	// labelsForAffinity := make(map[string]string)
-	// labelsForAffinity[podLabelForAffinity] = pod.ObjectMeta.Labels[podLabelForAffinity]
-
-	// // check if the Namespace is a jive jcx installation one
-	// ns, err := nsLister.Get(pod.ObjectMeta.Namespace)
-	// if err != nil {
-	// 	klog.Errorf("Failed retrieving %s: %+v", pod.ObjectMeta.Namespace, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// if !nsLabelSel.Matches(ns.ObjectMeta.Labels) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// // try to get the WebApp HPA in this NS
-	// hpa, err := hpaLister.HorizontalPodAutoscalers(ns.ObjectMeta.Name).Get(hpaName)
-	// if err != nil {
-	// 	klog.Errorf("Failed retrieving %s/%s: %+v", ns.ObjectMeta.Name, hpaName, err)
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// if !hpaLabelSel.Matches(hpa.ObjectMeta.Labels) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// // check if maxReplicas in this HPA is ok to set affinity
-	// if hpa.Spec.MaxReplicas > int32(maximumHpaReplicas) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// affinityPatchOp := "replace"
-	// if pod.Spec.Affinity == nil {
-	// 	pod.Spec.Affinity = &corev1.Affinity{}
-	// 	affinityPatchOp = "add"
-	// }
-
-	// if pod.Spec.Affinity.PodAntiAffinity == nil {
-	// 	pod.Spec.Affinity.PodAntiAffinity = &corev1.PodAntiAffinity{}
-	// } else if isExistingPodAntiAffinityOk(pod.Spec.Affinity.PodAntiAffinity) {
-	// 	// leave it unchanged
-	// 	return &admissionV1beta1.AdmissionResponse{Allowed: true}
-	// }
-
-	// terms := pod.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
-	// terms = append(terms, getHardPodAntiAffinityTerm(labelsForAffinity))
-	// pod.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution = terms
-
-	// value = pod.Spec.Affinity
 
 	patch = append(patch, webhooks.PatchOperation{
 		Op:    affinityPatchOp,
