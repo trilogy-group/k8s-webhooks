@@ -17,6 +17,7 @@ type Flags struct {
 
 	deploymentAffinity   bool
 	ingressRewriteTarget bool
+	jiveWebAppsAffinity  bool
 }
 
 func parseFlags() *Flags {
@@ -38,6 +39,8 @@ func parseFlags() *Flags {
 
 	flag.BoolVar(&flags.deploymentAffinity, "deployment-affinity", false, "Setup deployment affinity webhook")
 	flag.BoolVar(&flags.ingressRewriteTarget, "ingress-rewrite-target", false, "Setup ingress rewrite-target webhook")
+	flag.BoolVar(&flags.jiveWebAppsAffinity, "jive-webapps-affinity", false, "Setup ingress jive webapp affinity webhook")
+
 	flag.CommandLine.AddGoFlagSet(goflag.CommandLine)
 	flag.Parse()
 	return flags

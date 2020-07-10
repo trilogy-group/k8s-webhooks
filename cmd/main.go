@@ -17,19 +17,8 @@ import (
 
 	"github.com/trilogy-group/k8s-webhooks/pkg/plugins/affinity"
 	"github.com/trilogy-group/k8s-webhooks/pkg/plugins/ingress"
+	"github.com/trilogy-group/k8s-webhooks/pkg/plugins/jivewebappaffinity"
 )
-
-// type Flags struct {
-// 	deploymentAffinity   bool
-// 	ingressRewriteTarget bool
-// }
-
-// func parseFlags() *Flags {
-// 	var flags Flags
-// 	flag.BoolVar(&flags.deploymentAffinity, "deployment-affinity", false, "Setup deployment affinity webhook")
-// 	flag.BoolVar(&flags.ingressRewriteTarget, "ingress-rewrite-target", false, "Setup ingress rewrite-target webhook")
-// 	return &flags
-// }
 
 var version string
 
@@ -63,6 +52,11 @@ func main() {
 	if flags.ingressRewriteTarget {
 		wh := ingress.NewWebhookHandler()
 		wh.Setup(ws, "/ingress/rewrite")
+	}
+
+	if flags.jiveWebAppsAffinity {
+		wh := jivewebappaffinity.NewWebhookHandler()
+		wh.Setup(ws, "/jive/webapp")
 	}
 
 	go func() {

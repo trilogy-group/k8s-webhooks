@@ -3,6 +3,7 @@ package jivewebappaffinity
 import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog"
 	"strconv"
 )
@@ -11,7 +12,7 @@ func resetVarsFromDefaults() {
 	maximumHpaReplicas = defaultMaximumHpaReplicas
 	hpaName = defaultHpaName
 	podLabelForAffinity = defaultPodLabelForAffinity
-	topologyKet = defaultTopologyKey
+	topologyKey = defaultTopologyKey
 	nsLabelSelStr = defaultNsLabelSelStr
 	hpaLabelSelStr = defaultHpaLabelSelStr
 	nsPrefix = defaultNsPrefix
@@ -27,8 +28,12 @@ func setVarsFromYAMLString(yamlString string) {
 	if val, found := conf["maximumHpaReplicas"]; found {
 		ival, ok := val.(int)
 		if !ok {
-			if ival, err := strconv.Atoi(val); err == nil {
-				maximumHpaReplicas = ival
+			if sval, ok := val.(string); ok {
+				if ival, err := strconv.Atoi(sval); err == nil {
+					maximumHpaReplicas = ival
+				}
+			} else {
+				maximumHpaReplicas = defaultMaximumHpaReplicas
 			}
 		} else {
 			maximumHpaReplicas = ival
@@ -80,4 +85,17 @@ func onConfigMapUpdate(old interface{}, new interface{}) {
 		}
 		setVarsFromYAMLString(cm.Data[configMapKey])
 	}
+
+	var err error
+	if nsLabelSel, err = labels.Parse(nsLabelSelStr); err != nil {
+		klog.Errorf("Invalid NS labels string: %s: %+v - falling back to default: %s",
+			nsLabelSelStr, err, defaultNsLabelSelStr)
+		nsLabelSel, _ = labels.Parse(defaultNsLabelSelStr)
+	}
+	if hpaLabelSel, err = labels.Parse(hpaLabelSelStr); err != nil {
+		klog.Errorf("Invalid NS labels string: %s: %+v - falling back to default: %s",
+			hpaLabelSelStr, err, defaultHpaLabelSelStr)
+		hpaLabelSel, _ = labels.Parse(defaultHpaLabelSelStr)
+	}
+
 }

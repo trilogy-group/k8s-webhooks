@@ -1,21 +1,22 @@
 package jivewebappaffinity
 
 import (
-	"strconv"
+	"fmt"
 	"strings"
+	"time"
 
-	"gopkg.in/yaml.v2"
 	"k8s.io/klog"
 
 	admissionV1beta1 "k8s.io/api/admission/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	l_autoscalingv1 "k8s.io/client-go/listers/autoscaling/v1"
+	l_corev1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/trilogy-group/k8s-webhooks/pkg/utils"
@@ -25,28 +26,31 @@ import (
 const (
 	configMapKey string = "jiveWebAppsAffinity"
 
-	defaultMaximumHpaReplicas int    = 10
-	defaultHpaName            string = "webapp-hpa"
-	defaultPLabelForAffinity  string = "jcx.inst.uri"
-	defaultTopologyKey        string = "kubernetes.io/hostname"
-	defaultNsLabelSelStr      string = "jcx.custormer.id,jcx.environment,jcx.inst.uri,jcx.name,jcx.suspended=false"
-	defaultHpaLabelSelStr     string = "jcx.environment"
-	defaultNsPrefix           string = ""
+	defaultMaximumHpaReplicas  int    = 10
+	defaultHpaName             string = "webapp-hpa"
+	defaultPodLabelForAffinity string = "jcx.inst.uri"
+	defaultTopologyKey         string = "kubernetes.io/hostname"
+	defaultNsLabelSelStr       string = "jcx.customer.id,jcx.environment,jcx.inst.uri,jcx.name,jcx.suspended=false"
+	defaultHpaLabelSelStr      string = "jcx.environment"
+	defaultNsPrefix            string = ""
+
+	// factoryNS  string = "jivejcxwebappsnamespaces"
+	// factoryHPA string = "jivejcxwebappshorizontalpodautoscalers"
 )
 
 var (
 	maximumHpaReplicas  int    = defaultMaximumHpaReplicas
 	hpaName             string = defaultHpaName
 	podLabelForAffinity string = defaultPodLabelForAffinity
-	topologyKet         string = defaultTopologyKey
+	topologyKey         string = defaultTopologyKey
 	nsLabelSelStr       string = defaultNsLabelSelStr
 	hpaLabelSelStr      string = defaultHpaLabelSelStr
 	nsPrefix            string = defaultNsPrefix
 
 	nsLabelSel, hpaLabelSel labels.Selector
 
-	nsLister  corev1.NamespaceLister
-	hpaLister autoscalingv1.HorizontalPodAutoscalerLister
+	nsLister  l_corev1.NamespaceLister
+	hpaLister l_autoscalingv1.HorizontalPodAutoscalerLister
 )
 
 type webhookHandler struct{}
@@ -59,21 +63,13 @@ func (wh *webhookHandler) Setup(server webhooks.WebhookServer, path string) {
 	var cs kubernetes.Interface
 	var err error
 
-	// setup label selector for NSa and HPAs
-	if nsLabelSel, err = labels.Parse(nsLabelSelStr); err != nil {
-		klog.Fatalf("Invalid NS labels string: %s: %+v", nsLabelSelStr, err)
-	}
-	if hpaLabelSel, err = labels.Parse(hpaLabelSelStr); err != nil {
-		klog.Fatalf("Invalid NS labels string: %s: %+v", hpaLabelSelStr, err)
-	}
-
 	config := server.GetConfig()
 
 	// Dynamic configuration management
 	f := server.GetFactory("kubernetes")
 	if f == nil {
 		if cs == nil {
-			cs = utils.GetClientseOrDie(config.Kubeconfig, nil)
+			cs = utils.GetClientsetOrDie(config.Kubeconfig, nil)
 		}
 		// get initial values from CM
 		if cm, err := cs.CoreV1().ConfigMaps(config.CmNamespace).
@@ -82,7 +78,7 @@ func (wh *webhookHandler) Setup(server webhooks.WebhookServer, path string) {
 				setVarsFromYAMLString(cm.Data[configMapKey])
 			}
 		}
-		f := informers.NewSharedInformerFactory(cs, 0)
+		f := informers.NewSharedInformerFactory(cs, 300*time.Second)
 		server.RegisterFactory("kubernetes", f)
 	}
 	f.Core().V1().ConfigMaps().Informer().AddEventHandler(
@@ -104,23 +100,16 @@ func (wh *webhookHandler) Setup(server webhooks.WebhookServer, path string) {
 			},
 		})
 
-	// caches for core logic
-	jiveFactory := server.GetFactory("jivejcxwebapps")
-	if jiveFactory == nil {
-		if cs == nil {
-			cs = utils.GetClientseOrDie(config.Kubeconfig, nil)
-		}
-		jiveFactory = informers.NewSharedInformerFactory(cs, 0).WithTweakListOptions(func(lo *metav1.ListOptions) {
-			if lo.Kind == "Namespace" {
-				lo.LabelSelector = nsLabelSelStr
-			} else if lo.Kind == "HorizontalPodAutoscaler" {
-				lo.LabelSelector = hpaLabelSelStr
-			}
-		})
-	}
+	nsLister = f.Core().V1().Namespaces().Lister()
+	hpaLister = f.Autoscaling().V1().HorizontalPodAutoscalers().Lister()
 
-	nsLister = jiveFactory.Core().V1().Namespaces().Lister()
-	hpaLister = jiveFactory.Autoscaling().V1().HorizontalPodAutoscalers().Lister()
+	// setup label selector for NSa and HPAs
+	if nsLabelSel, err = labels.Parse(nsLabelSelStr); err != nil {
+		klog.Fatalf("Invalid NS labels string: %s: %+v", nsLabelSelStr, err)
+	}
+	if hpaLabelSel, err = labels.Parse(hpaLabelSelStr); err != nil {
+		klog.Fatalf("Invalid NS labels string: %s: %+v", hpaLabelSelStr, err)
+	}
 
 	server.RegisterHandler(path, mutateAffinity)
 }
@@ -153,16 +142,31 @@ func isExistingPodAntiAffinityOk(terms []corev1.PodAffinityTerm) bool {
 // the webhook should leave the obcjec unchanged.
 // the return value in case of success is the first patch to the affinity attribute Op and Value,
 // basically the "add" or "replcace" and the updated Affinity attribute
-func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec *corev1.PodSpec) (interface{}, error) {
+func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec *corev1.PodSpec) (string, interface{}, error) {
+	klog.V(5).Infof("checkAndUpdateAffinity (in ns %s) on metadata: %+v -- spec: %+v", namespace, metadata, spec)
+	{
+		if list, err := nsLister.List(nsLabelSel); err != nil {
+			klog.V(6).Infof("Listing cached NSs err: %+v", err)
+		} else {
+			klog.V(6).Infof("Listing cached NSs: %+v", list)
+		}
+
+		if list, err := hpaLister.List(hpaLabelSel); err != nil {
+			klog.V(6).Infof("Listing cached HPAs err: %+v", err)
+		} else {
+			klog.V(6).Infof("Listing cached HPAs: %+v", list)
+		}
+	}
+
 	// check for namespace prefix if we have to
 	if len(nsPrefix) > 0 && !strings.HasPrefix(namespace, nsPrefix) {
 		return "", nil, fmt.Errorf("Namespace %s has not prefix %s", namespace, nsPrefix)
 	}
 
 	// check for the label we want to use in pod anti-affinity
-	if _, ok = metadata.Labels[podLabelForAffinity]; !ok {
-		return "", nil, fmt.Errorf("Failed retrieving %s label on %s/%s: %+v",
-			podLabelForAffinity, namespace, metadata.Name, err)
+	if _, ok := metadata.Labels[podLabelForAffinity]; !ok {
+		return "", nil, fmt.Errorf("Failed retrieving %s label on %s/%s",
+			podLabelForAffinity, namespace, metadata.Name)
 	}
 	labelsForAffinity := make(map[string]string)
 	labelsForAffinity[podLabelForAffinity] = metadata.Labels[podLabelForAffinity]
@@ -173,7 +177,7 @@ func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec 
 		return "", nil, fmt.Errorf("Failed retrieving %s: %+v", namespace, err)
 	}
 
-	if !nsLabelSel.Matches(ns.ObjectMeta.Labels) {
+	if !nsLabelSel.Matches(labels.Set(ns.ObjectMeta.Labels)) {
 		// leave it unchanged
 		return "", nil, fmt.Errorf("Namespace %s doesn't match labels", namespace)
 	}
@@ -185,7 +189,7 @@ func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec 
 		return "", nil, fmt.Errorf("Failed retrieving %s/%s: %+v", ns.ObjectMeta.Name, hpaName, err)
 	}
 
-	if !hpaLabelSel.Matches(hpa.ObjectMeta.Labels) {
+	if !hpaLabelSel.Matches(labels.Set(hpa.ObjectMeta.Labels)) {
 		// leave it unchanged
 		return "", nil, fmt.Errorf("HPA does't match labels")
 	}
@@ -204,7 +208,8 @@ func checkAndUpdateAffinity(namespace string, metadata *metav1.ObjectMeta, spec 
 
 	if spec.Affinity.PodAntiAffinity == nil {
 		spec.Affinity.PodAntiAffinity = &corev1.PodAntiAffinity{}
-	} else if isExistingPodAntiAffinityOk(spec.Affinity.PodAntiAffinity) {
+	} else if isExistingPodAntiAffinityOk(
+		spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) {
 		// leave it unchanged
 		return "", nil, fmt.Errorf("No need to patch")
 	}
@@ -243,12 +248,12 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 
 	// core logic
 	affinityPatchOp, value, err := checkAndUpdateAffinity(
-		depl.ObjectMeta.Namespace,
+		ar.Request.Namespace,
 		&depl.Spec.Template.ObjectMeta,
 		&depl.Spec.Template.Spec)
 
 	if err != nil {
-		klog.Errorf(err)
+		klog.Errorf("%v", err)
 		// leave it unchanged
 		return &admissionV1beta1.AdmissionResponse{Allowed: true}
 	}
@@ -313,9 +318,9 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 
 	// core logic
 
-	affinityPatchOp, value, err := checkAndUpdateAffinity(pod.ObjectMeta.Namespace, &pod.ObjectMeta, &pod.Spec)
+	affinityPatchOp, value, err := checkAndUpdateAffinity(ar.Request.Namespace, &pod.ObjectMeta, &pod.Spec)
 	if err != nil {
-		klog.Errorf(err)
+		klog.Errorf("%v", err)
 		// leave it unchanged
 		return &admissionV1beta1.AdmissionResponse{Allowed: true}
 	}

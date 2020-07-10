@@ -3,14 +3,14 @@ package webhooks
 import (
 	// "flag"
 	"github.com/spf13/pflag"
-	"k8s.io/client-go/tools/clientcmd"
+	// "k8s.io/client-go/tools/clientcmd"
 )
 
 const (
 	defaultUseConfigMap       bool   = false
 	defaultConfigMapNamespace string = "kube-system"
 	defaultConfigMapName      string = "webhooks-manager-config"
-	defaultKubeconfig         string = clientcmd.RecommendedConfigPathFlag
+	defaultKubeconfig         string = "" // clientcmd.RecommendedConfigPathFlag
 
 	defaultPluginsDir string = "/webhookplugins"
 	defaultAdmit      string = "Always"
