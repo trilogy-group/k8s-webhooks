@@ -127,7 +127,9 @@ func isExistingPodAntiAffinityOk(terms []corev1.PodAffinityTerm) bool {
 	for _, term := range terms {
 		if term.LabelSelector != nil {
 			if _, ok := term.LabelSelector.MatchLabels[podLabelForAffinity]; ok {
-				return true
+				if term.TopologyKey == topologyKey {
+					return true
+				}
 			}
 		}
 	}
@@ -246,6 +248,9 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 		}
 	}
 
+	// update the admission review for the caller to be able to record event
+	ar.Request.Object.Object = &depl
+
 	// core logic
 	affinityPatchOp, value, err := checkAndUpdateAffinity(
 		ar.Request.Namespace,
@@ -291,7 +296,7 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 		}
 	}
 
-	klog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
+	klog.V(4).Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
 	return &admissionV1beta1.AdmissionResponse{
 		Allowed: true,
 		Patch:   patchBytes,
@@ -315,6 +320,9 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 			},
 		}
 	}
+
+	// update the admission review for the caller to be able to record event
+	ar.Request.Object.Object = &pod
 
 	// core logic
 
@@ -358,7 +366,7 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 		}
 	}
 
-	klog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
+	klog.V(4).Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
 	return &admissionV1beta1.AdmissionResponse{
 		Allowed: true,
 		Patch:   patchBytes,

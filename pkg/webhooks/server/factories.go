@@ -41,8 +41,8 @@ func (whsrv *webhookServer) GetFactory(name string) informers.SharedInformerFact
 
 func WithFactories(factoriesMap FactoriesMap) WebhookServerOption {
 	return func(whsrv WebhookServer) WebhookServer {
-		for path, handler := range factoriesMap {
-			whsrv.RegisterFactory(path, handler)
+		for name, handler := range factoriesMap {
+			whsrv.RegisterFactory(name, handler)
 		}
 		return whsrv
 	}

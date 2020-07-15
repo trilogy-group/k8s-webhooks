@@ -10,12 +10,22 @@ import (
 
 	"k8s.io/klog"
 
+	. "github.com/trilogy-group/k8s-webhooks/pkg/webhooks"
 	admissionV1beta1 "k8s.io/api/admission/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/client-go/kubernetes/scheme"
+	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 
-	. "github.com/trilogy-group/k8s-webhooks/pkg/webhooks"
+	"github.com/trilogy-group/k8s-webhooks/pkg/utils"
+)
+
+const (
+	admissionDenied  string = "AdmissionDenied"
+	admissionMutated string = "AdmissionMutated"
 )
 
 var (
@@ -36,6 +46,8 @@ type webhookServer struct {
 	handlers  HandlersMap
 	stopCh    chan struct{}
 	factories FactoriesMap
+	cw        *CertWatcher
+	recorder  record.EventRecorder
 }
 
 func (whsrv *webhookServer) GetConfig() *WebhookServerConfig {
@@ -58,12 +70,21 @@ func (whsrv *webhookServer) Start() error {
 	mux.HandleFunc("/", whsrv.serve)
 	whsrv.server.Handler = mux
 
+	// start the certWatcher
+	if whsrv.cw != nil {
+		go func() {
+			if err := whsrv.cw.Start(whsrv.stopCh); err != nil {
+				klog.Errorf("certificate watcher error: %v", err)
+			}
+		}()
+	}
+
 	return whsrv.server.ListenAndServeTLS("", "")
 }
 
 // Serve method for webhook server
 func (whsrv *webhookServer) serve(w http.ResponseWriter, r *http.Request) {
-	klog.Infof("Start Serving request: %s", r.URL.Path)
+	klog.V(4).Infof("Start Serving request: %s", r.URL.Path)
 
 	var body []byte
 	if r.Body != nil {
@@ -96,6 +117,10 @@ func (whsrv *webhookServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if klog.V(5) {
+		logUserInfo(&ar)
+	}
+
 	// try handlers
 	handler := whsrv.GetHandlerForPath(r.URL.Path)
 	admissionResponse = handler(&ar)
@@ -112,15 +137,31 @@ func (whsrv *webhookServer) serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		klog.Errorf("Can't encode response: %v", err)
 		http.Error(w, fmt.Sprintf("could not encode response: %v", err), http.StatusInternalServerError)
+		if ar.Request.Object.Object != nil {
+			whsrv.recorder.Eventf(ar.Request.Object.Object, corev1.EventTypeWarning, "ErrorEncodingResponse", "could not encode response: %v", err)
+		}
 	}
 
 	if _, err := w.Write(resp); err != nil {
 		klog.Errorf("Can't write response: %v", err)
 		http.Error(w, fmt.Sprintf("could not write response: %v", err), http.StatusInternalServerError)
+		if ar.Request.Object.Object != nil {
+			whsrv.recorder.Eventf(ar.Request.Object.Object, corev1.EventTypeWarning, "ErrorEncodingResponse", "could not write response: %v", err)
+		}
 	} else {
-		klog.Infof("Response written! (was %v)", admissionReview)
+		klog.V(5).Infof("Response written! (was %v)", admissionReview)
+		if ar.Request.Object.Object != nil && admissionResponse != nil {
+			if admissionResponse.Result != nil && admissionResponse.Result.Message != "" {
+				whsrv.recorder.Eventf(ar.Request.Object.Object, corev1.EventTypeWarning, "AdmissionFailed", admissionResponse.Result.Message)
+			} else if !admissionResponse.Allowed {
+				whsrv.recorder.Eventf(ar.Request.Object.Object, corev1.EventTypeNormal, admissionDenied,
+					getEventMessage(&ar, admissionDenied, r.URL.Path))
+			} else if len(admissionResponse.Patch) > 0 {
+				whsrv.recorder.Eventf(ar.Request.Object.Object, corev1.EventTypeNormal, admissionMutated,
+					getEventMessage(&ar, admissionMutated, r.URL.Path))
+			}
+		}
 	}
-
 }
 
 var _ WebhookServer = &webhookServer{}
@@ -132,7 +173,16 @@ func NewWebhookServer(config *WebhookServerConfig, params *WhSrvParameters) Webh
 	if params == nil {
 		params = NewDefaultWebhookServerParameters()
 	}
-	pair, err := tls.LoadX509KeyPair(params.CertFile, params.KeyFile)
+
+	// Be aware of certificate changes, caused by renewal for ie
+	// use certwatcher from controller-runtime
+	//
+	// pair, err := tls.LoadX509KeyPair(params.CertFile, params.KeyFile)
+	// if err != nil {
+	// 	klog.Fatalf("Failed to load key pair: %v", err)
+	// }
+
+	cw, err := NewCertWatcher(params.CertFile, params.KeyFile)
 	if err != nil {
 		klog.Fatalf("Failed to load key pair: %v", err)
 	}
@@ -141,9 +191,14 @@ func NewWebhookServer(config *WebhookServerConfig, params *WhSrvParameters) Webh
 		config: config,
 		stopCh: make(chan struct{}),
 		server: &http.Server{
-			Addr:      fmt.Sprintf(":%v", params.Port),
-			TLSConfig: &tls.Config{Certificates: []tls.Certificate{pair}},
+			Addr: fmt.Sprintf(":%v", params.Port),
+			TLSConfig: &tls.Config{
+				NextProtos:     []string{"h2"},
+				GetCertificate: cw.GetCertificate,
+			},
 		},
+		cw:       cw,
+		recorder: createEventRecorder(config),
 	}
 
 	if config.UseConfigMap {
@@ -159,4 +214,49 @@ func NewWebhookServerWithOptions(config *WebhookServerConfig, params *WhSrvParam
 		whsrv = opt(whsrv)
 	}
 	return whsrv
+}
+
+// copied from cluster-autoscaler
+func createEventRecorder(config *WebhookServerConfig) record.EventRecorder {
+	cfg := utils.GetClientConfigOrDie(config.Kubeconfig)
+	cs := utils.GetClientsetFromConfigOrDie(cfg)
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartLogging(klog.V(4).Infof)
+	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: v1core.New(cs.CoreV1().RESTClient()).Events("")})
+	return eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "webhooks-manager"})
+}
+
+func getEventMessage(ar *admissionV1beta1.AdmissionReview, eventName, path string) string {
+	msg := fmt.Sprintf("Handler for %s", path)
+
+	switch eventName {
+	case admissionDenied:
+		msg = fmt.Sprintf("%s %s the %s operation for a %s", msg, "denied", ar.Request.Operation, ar.Request.Kind.Kind)
+	case admissionMutated:
+		msg = fmt.Sprintf("%s %s a %s", msg, "patched", ar.Request.Kind.Kind)
+	}
+
+	if ar.Request.Name != "" {
+		msg = fmt.Sprintf("%s named %s", msg, ar.Request.Name)
+	}
+	if ar.Request.Namespace != "" {
+		msg = fmt.Sprintf("%s in %s namespace", msg, ar.Request.Namespace)
+	} else {
+		msg = fmt.Sprintf("%s (cluster-scoped)", msg)
+	}
+
+	return msg
+}
+
+func logUserInfo(ar *admissionV1beta1.AdmissionReview) {
+	ns := "(cluster-scoped)"
+	if ar.Request.Namespace != "" {
+		ns = fmt.Sprintf("in %s", ar.Request.Namespace)
+	}
+	named := ""
+	if ar.Request.Name != "" {
+		named = fmt.Sprintf(" named %s", ar.Request.Name)
+	}
+	klog.Infof("UserInfo: %+v requested to %s a %s%s %s",
+		ar.Request.UserInfo, ar.Request.Operation, ar.Request.Kind.Kind, named, ns)
 }

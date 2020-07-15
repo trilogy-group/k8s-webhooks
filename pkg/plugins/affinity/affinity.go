@@ -147,6 +147,9 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 		}
 	}
 
+	// kindly provide the decoded object to the caller
+	ar.Request.Object.Object = &depl
+
 	// core logic
 
 	// check if replicas is >= 3 and there is no affinity in Spec
@@ -200,7 +203,7 @@ func mutateDeploymentAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1
 		}
 	}
 
-	klog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
+	klog.V(4).Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
 	return &admissionV1beta1.AdmissionResponse{
 		Allowed: true,
 		Patch:   patchBytes,
@@ -260,6 +263,9 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 			},
 		}
 	}
+
+	// kindly provide the decoded object to the caller
+	ar.Request.Object.Object = &pod
 
 	// core logic
 	rs := getReplicaSetFromPod(&pod)
@@ -324,7 +330,7 @@ func mutatePodAffinity(ar *admissionV1beta1.AdmissionReview) *admissionV1beta1.A
 		}
 	}
 
-	klog.Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
+	klog.V(4).Infof("AdmissionResponse: patch=%v\n", string(patchBytes))
 	return &admissionV1beta1.AdmissionResponse{
 		Allowed: true,
 		Patch:   patchBytes,

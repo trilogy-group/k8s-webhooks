@@ -8,7 +8,7 @@ COMPONENT = webhooks-manager
 
 DOCKER_IMAGE = "${REGISTRY}/${COMPONENT}:${VERSION}"
 
-K8S_VERSION = 1.15.0
+K8S_VERSION = 1.15.10
 GNOSTIC_VERSION = 0.4.0
 
 .PHONY: build static install_deps deps clean
@@ -20,6 +20,7 @@ golang:
 install_deps:
 	go get -d \
 		k8s.io/client-go@kubernetes-${K8S_VERSION} \
+		k8s.io/apimachinery@kubernetes-${K8S_VERSION} \
 		github.com/googleapis/gnostic@v${GNOSTIC_VERSION}
 
 deps:
