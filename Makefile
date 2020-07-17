@@ -8,7 +8,7 @@ COMPONENT = webhooks-manager
 
 DOCKER_IMAGE = "${REGISTRY}/${COMPONENT}:${VERSION}"
 
-K8S_VERSION = 1.15.10
+K8S_VERSION = 1.15.0
 GNOSTIC_VERSION = 0.4.0
 
 .PHONY: build static install_deps deps clean
